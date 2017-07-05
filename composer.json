@@ -1,0 +1,34 @@
+{
+    "name": "campaignchain/protobuf",
+    "description": "Tools for using Google Protocol Buffers with CampaignChain",
+    "keywords": ["campaignchain"],
+    "type": "campaignchain-symfony",
+    "homepage": "http://www.campaignchain.com",
+    "license": "Apache-2.0",
+    "authors": [
+        {
+            "name": "CampaignChain, Inc.",
+            "email": "info@campaignchain.com",
+            "homepage": "http://www.campaignchain.com"
+        }
+    ],
+    "support": {
+        "issues": "https://github.com/CampaignChain/campaignchain/issues",
+        "docs": "http://doc.campaignchain.com"
+    },
+    "require": {
+        "google/protobuf": "~3.0"
+    },
+    "autoload": {
+        "psr-4": { "CampaignChain\\ProtobufBundle\\": "" }
+    },
+    "extra": {
+        "campaignchain": {
+            "kernel": {
+                "classes": [
+                    "CampaignChain\\ProtobufBundle\\CampaignChainProtobufBundle"
+                ]
+            }
+        }
+    }
+}

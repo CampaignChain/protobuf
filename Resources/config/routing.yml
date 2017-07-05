@@ -1,0 +1,3 @@
+campaign_chain_protobuf_homepage:
+    path:     /hello/{name}
+    defaults: { _controller: CampaignChainProtobufBundle:Default:index }
