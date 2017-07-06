@@ -33,11 +33,13 @@ class Configuration implements ConfigurationInterface
     public function getConfigTreeBuilder()
     {
         $treeBuilder = new TreeBuilder();
-        $rootNode = $treeBuilder->root('campaign_chain_protobuf');
+        $rootNode = $treeBuilder->root('campaignchain_protobuf');
 
-        // Here you should define the parameters that are allowed to
-        // configure your bundle. See the documentation linked above for
-        // more information on that topic.
+        $rootNode
+            ->children()
+                ->scalarNode('php_out')->end()
+                ->scalarNode('bundle_proto_path')->end()
+            ->end();
 
         return $treeBuilder;
     }

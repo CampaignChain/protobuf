@@ -17,8 +17,13 @@
 
 namespace CampaignChain\ProtobufBundle;
 
+use CampaignChain\ProtobufBundle\DependencyInjection\CampaignChainProtobufExtension;
 use Symfony\Component\HttpKernel\Bundle\Bundle;
 
 class CampaignChainProtobufBundle extends Bundle
 {
+    public function getContainerExtension()
+    {
+        return new CampaignChainProtobufExtension();
+    }
 }

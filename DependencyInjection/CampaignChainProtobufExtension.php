@@ -19,7 +19,7 @@ namespace CampaignChain\ProtobufBundle\DependencyInjection;
 
 use Symfony\Component\DependencyInjection\ContainerBuilder;
 use Symfony\Component\Config\FileLocator;
-use Symfony\Component\HttpKernel\DependencyInjection\Extension;
+use CampaignChain\CoreBundle\Bundle\DependencyInjection\Extension;
 use Symfony\Component\DependencyInjection\Loader;
 
 /**
@@ -39,5 +39,7 @@ class CampaignChainProtobufExtension extends Extension
 
         $loader = new Loader\YamlFileLoader($container, new FileLocator(__DIR__.'/../Resources/config'));
         $loader->load('services.yml');
+
+        $this->setParameters($container, $config);
     }
 }
