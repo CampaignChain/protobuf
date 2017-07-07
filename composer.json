@@ -17,7 +17,7 @@
         "docs": "http://doc.campaignchain.com"
     },
     "require": {
-        "google/protobuf": "~3.0"
+        "google/protobuf": "dev-master"
     },
     "autoload": {
         "psr-4": { "CampaignChain\\ProtobufBundle\\": "" }
