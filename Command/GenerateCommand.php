@@ -65,10 +65,11 @@ class GenerateCommand extends ContainerAwareCommand
 
         $table = [];
 
+        /** @var Bundle $bundle */
         foreach ($bundleList as $bundle) {
             $packageSchemaDir = $this->getContainer()->getParameter('kernel.root_dir').
-                DIRECTORY_SEPARATOR.'..'.DIRECTORY_SEPARATOR.'vendor'.
-                DIRECTORY_SEPARATOR.$bundle->getName().$this->protoPath;
+                DIRECTORY_SEPARATOR.'..'.
+                DIRECTORY_SEPARATOR.$bundle->getPath().$this->protoPath;
 
             if (!$fs->exists($packageSchemaDir)) {
                 continue;
