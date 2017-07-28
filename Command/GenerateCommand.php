@@ -86,6 +86,7 @@ class GenerateCommand extends ContainerAwareCommand
             foreach ($migrationFiles as $migrationFile) {
                 $fs->copy($migrationFile->getPathname(), $phpOutDir.DIRECTORY_SEPARATOR.$migrationFile->getFilename(), true);
                 $files[] = $migrationFile->getPathname();
+                $tableFiles[] = basename($migrationFile->getPathname());
 
             }
 
@@ -95,9 +96,9 @@ class GenerateCommand extends ContainerAwareCommand
 
             $protos[] = array(
                 'bundle' => $bundle->getName(),
-                'file' => implode(', ', $files)
+                'files' => $files,
             );
-            $table[] = [$bundle->getName(), basename(implode(', ', $files))];
+            $table[] = [$bundle->getName(), implode(', ', $tableFiles)];
 
         }
         if(!is_array($table) || !count($table)) {
@@ -110,18 +111,20 @@ class GenerateCommand extends ContainerAwareCommand
                 $modulePhpOutdir = $phpOutDir . DIRECTORY_SEPARATOR . $proto['bundle'];
                 $fs->mkdir($modulePhpOutdir);
 
-                $command = 'protoc --proto_path=' . dirname($proto['file']) .' --php_out=' . $modulePhpOutdir . ' ' . $proto['file'];
-                $process = new Process($command);
-                $process->run();
+                foreach ($proto['files'] as $protoFile) {
+                    $command = 'protoc --proto_path=' . dirname($protoFile) . ' --php_out=' . $modulePhpOutdir . ' ' . $protoFile;
+                    $process = new Process($command);
+                    $process->run();
 
-                // executes after the command finishes
-                if (!$process->isSuccessful()) {
-                    throw new ProcessFailedException($process);
+                    // executes after the command finishes
+                    if (!$process->isSuccessful()) {
+                        throw new ProcessFailedException($process);
+                    }
+
+                    $io->success($command);
+
+                    $io->write($process->getOutput());
                 }
-
-                $io->success($command);
-
-                $io->write($process->getOutput());
             }
         }
     }
