@@ -81,6 +81,7 @@ class GenerateCommand extends ContainerAwareCommand
                 ->name('*.proto');
 
             $files = [];
+            $tableFiles = [];
 
             /** @var SplFileInfo $migrationFile */
             foreach ($migrationFiles as $migrationFile) {
