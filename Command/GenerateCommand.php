@@ -17,6 +17,10 @@
 
 namespace CampaignChain\ProtobufBundle\Command;
 
+use CampaignChain\CoreBundle\Entity\Bundle;
+use CampaignChain\CoreBundle\Service\Elasticsearch;
+use CampaignChain\CoreBundle\Wizard\Install\Driver\YamlConfig;
+use CampaignChain\Security\Authentication\Server\OAuthBundle\Entity\Client;
 use Symfony\Bundle\FrameworkBundle\Command\ContainerAwareCommand;
 use Symfony\Component\Console\Input\ArrayInput;
 use Symfony\Component\Console\Input\InputInterface;
@@ -42,14 +46,19 @@ class GenerateCommand extends ContainerAwareCommand
 
     protected function execute(InputInterface $input, OutputInterface $output)
     {
+        $io = new SymfonyStyle($input, $output);
+        $io->title('Gathering .proto files from CampaignChain packages');
+        $io->newLine();
+
+        // Connect to Elasticsearch
+        /** @var Elasticsearch $esService */
+        $esService = $this->getContainer()->get('campaignchain.core.service.elasticsearch');
+        $esClient = $esService->getClient();
+
         $this->protoPath =
             str_replace('/', DIRECTORY_SEPARATOR,
                 $this->getContainer()->getParameter('campaignchain_protobuf.bundle_proto_path')
             );
-
-        $io = new SymfonyStyle($input, $output);
-        $io->title('Gathering .proto files from CampaignChain packages');
-        $io->newLine();
 
         $locator = $this->getContainer()->get('campaignchain.core.module.locator');
         $bundleList = $locator->getAvailableBundles();
@@ -75,20 +84,256 @@ class GenerateCommand extends ContainerAwareCommand
                 continue;
             }
 
-            $migrationFiles = new Finder();
-            $migrationFiles->files()
+            $protoFiles = new Finder();
+            $protoFiles->files()
                 ->in($packageSchemaDir)
                 ->name('*.proto');
 
             $files = [];
             $tableFiles = [];
+            $tableMappings = [];
 
-            /** @var SplFileInfo $migrationFile */
-            foreach ($migrationFiles as $migrationFile) {
-                $fs->copy($migrationFile->getPathname(), $phpOutDir.DIRECTORY_SEPARATOR.$migrationFile->getFilename(), true);
-                $files[] = $migrationFile->getPathname();
-                $tableFiles[] = basename($migrationFile->getPathname());
+            /** @var SplFileInfo $protoFile */
+            foreach ($protoFiles as $protoFile) {
+                /*
+                 * Register the .proto file to generate it later.
+                 */
+                $fs->copy($protoFile->getPathname(), $phpOutDir.DIRECTORY_SEPARATOR.$protoFile->getFilename(), true);
+                $files[] = $protoFile->getPathname();
+                $tableFiles[] = basename($protoFile->getPathname());
 
+                /*
+                 * Is there a configuration file for this .proto?
+                 */
+                $configFilePathname = str_replace('.proto', '.yml', $protoFile->getPathname());
+                if(file_exists($configFilePathname)){
+                    $configYml = new YamlConfig('', $configFilePathname);
+                    $config = $configYml->read();
+
+                    /*
+                     * If Elasticsearch mapping is defined, then update the
+                     * index accordingly.
+                     */
+                    if(isset($config['elasticsearch']) && isset($config['elasticsearch']['mappings'])) {
+                        $esMappings = $config['elasticsearch']['mappings'];
+                        $esType = str_replace('.proto', '', $protoFile->getFilename());
+
+                        $esIndexAlias =
+                            $this->getContainer()->getParameter('elasticsearch_index')
+                            . '.esp.'
+                            . str_replace('/', '.', $bundle->getName());
+                        $esIndexNew = str_replace('campaignchain.esp.', 'campaignchain_.esp.', $esIndexAlias).'.'.time();
+                        $aliases = array();
+                        $esIndexOld = null;
+
+                        $indexExists = $esClient->indices()->exists(array(
+                            'index' => $esIndexAlias
+                        ));
+
+                        if(!$indexExists){
+                            /*
+                             * Index does not exist, so let's create it.
+                             */
+
+                            // Create a new index
+                            $params = [
+                                'index' => $esIndexNew,
+                                'body' => [
+                                    'mappings' => [
+                                        $esType => [
+                                            'properties' => [
+                                                'properties' => $esMappings,
+                                            ]
+                                        ]
+                                    ]
+                                ],
+                            ];
+                            $io->writeln('Create new index ' . $esIndexNew);
+                            $esClient->indices()->create($params);
+
+                            // Create the alias
+                            $params = [
+                                'index' => $esIndexNew,
+                                'name' => $esIndexAlias,
+                            ];
+                            $io->writeln('Creating alias from index ' . $esIndexNew . ' with name ' . $esIndexAlias);
+                            $esClient->indices()->putAlias($params);
+
+                            $tableMappings[] = 'Yes';
+                        } else {
+                            /*
+                             * The index exists already, so let's make sure we
+                             * gracefully update the field types.
+                             */
+                            try {
+                                $aliases = $esClient->indices()->getAliases(array(
+                                    'index' => $esIndexAlias,
+                                ));
+
+                                print_r($aliases);
+
+                                if (!isset($aliases[$esIndexAlias]['aliases'])) {
+                                    $aliasesKeys = array_keys($aliases);
+                                    $esIndexOld = $aliasesKeys[0];
+                                }
+
+                                if ($esIndexOld == null) {
+                                    /*
+                                     * Backwards compatibility:
+                                     *
+                                     * We don't use an index alias yet, let's
+                                     * rename the index and create the alias.
+                                     */
+
+                                    // No alias yet
+                                    $io->writeln('No alias yet for index ' . $esIndexAlias);
+
+                                    // Create a new index
+                                    $params = [
+                                        'index' => $esIndexNew,
+                                        'body' => [
+                                            'mappings' => [
+                                                $esType => [
+                                                    'properties' => [
+                                                        'properties' => $esMappings,
+                                                    ]
+                                                ]
+                                            ]
+                                        ],
+                                    ];
+                                    $io->writeln('Create new index ' . $esIndexNew);
+                                    $esClient->indices()->create($params);
+
+                                    // Copy the existing index
+                                    $params = [
+                                        'body' => [
+                                            'source' => [
+                                                'index' => $esIndexAlias,
+                                            ],
+                                            'dest' => [
+                                                'index' => $esIndexNew,
+                                            ],
+                                        ],
+                                    ];
+                                    $io->writeln('Copying index ' . $esIndexAlias . ' to ' . $esIndexNew);
+                                    $esClient->reindex($params);
+
+                                    // Delete the existing index
+                                    $io->writeln('Deleting index ' . $esIndexAlias);
+                                    $esClient->indices()->delete(array(
+                                        'index' => $esIndexAlias,
+                                    ));
+
+                                    // Create the alias
+                                    $params = [
+                                        'index' => $esIndexNew,
+                                        'name' => $esIndexAlias,
+                                    ];
+                                    $io->writeln('Creating alias from index ' . $esIndexNew . ' with name ' . $esIndexAlias);
+                                    $esClient->indices()->putAlias($params);
+
+                                    $tableMappings[] = 'Yes';
+                                } else {
+                                    /*
+                                     * An alias exists, so let's update the field
+                                     * types.
+                                     */
+                                    try {
+                                        /*
+                                         * First, let's try to update index types.
+                                         */
+                                        $params = [
+                                            'index' => $esIndexOld,
+                                            'type' => $esType,
+                                            'body' => [
+                                                $esType => [
+                                                    'properties' => [
+                                                        'properties' => $esMappings,
+                                                    ]
+                                                ]
+                                            ],
+                                        ];
+
+                                        $esClient->indices()->putMapping($params);
+
+                                        $tableMappings[] = 'Yes';
+                                    } catch (\Exception $e) {
+                                        /*
+                                         * There was a conflict changing a field type.
+                                         * Hence, let's re-create the index without loosing
+                                         * data with zero downtime as described here:
+                                         * https://www.elastic.co/guide/en/elasticsearch/guide/current/index-aliases.html
+                                         */
+
+                                        // Create a new index
+                                        $params = [
+                                            'index' => $esIndexNew,
+                                            'body' => [
+                                                'mappings' => [
+                                                    $esType => [
+                                                        'properties' => [
+                                                            'properties' => $esMappings,
+                                                        ]
+                                                    ]
+                                                ]
+                                            ],
+                                        ];
+                                        $io->writeln('Create new index ' . $esIndexNew);
+                                        $esClient->indices()->create($params);
+
+                                        // Move copied data back to re-created index
+                                        $params = [
+                                            'body' => [
+                                                'source' => [
+                                                    'index' => $esIndexOld,
+                                                ],
+                                                'dest' => [
+                                                    'index' => $esIndexNew,
+                                                ],
+                                            ],
+                                        ];
+                                        $io->writeln('Copying index ' . $esIndexOld . ' to ' . $esIndexNew);
+                                        $esClient->reindex($params);
+
+                                        // Switch the alias
+                                        $actions[] = array(
+                                            'remove' => [
+                                                'index' => $esIndexOld,
+                                                'alias' => $esIndexAlias
+                                            ]
+                                        );
+                                        $actions[] = array(
+                                            'add' => [
+                                                'index' => $esIndexNew,
+                                                'alias' => $esIndexAlias
+                                            ]
+                                        );
+                                        $params = [
+                                            'body' => [
+                                                'actions' => $actions,
+                                            ]
+                                        ];
+                                        $io->writeln('Removing alias from ' . $esIndexOld . ' and adding it to ' . $esIndexNew);
+                                        $esClient->indices()->updateAliases($params);
+
+                                        // Delete the copy
+                                        $io->writeln('Deleting old index ' . $esIndexOld);
+                                        $esClient->indices()->delete(array(
+                                            'index' => $esIndexOld,
+                                        ));
+
+                                        $tableMappings[] = 'Yes';
+                                    }
+                                }
+                            } catch (\Exception $e) {
+                                $io->error($e->getMessage());
+                                $tableMappings[] = 'Error';
+                            }
+                        }
+                    }
+                } else {
+                    $tableMappings[] = 'No';
+                }
             }
 
             if(!count($files)){
@@ -99,14 +344,14 @@ class GenerateCommand extends ContainerAwareCommand
                 'bundle' => $bundle->getName(),
                 'files' => $files,
             );
-            $table[] = [$bundle->getName(), implode(', ', $tableFiles)];
+            $table[] = [$bundle->getName(), implode("\n", $tableFiles), implode("\n", $tableMappings)];
 
         }
+
         if(!is_array($table) || !count($table)) {
             $io->note('No .proto files found');
         } else {
-            $io->table(['Module', 'Proto'], $table);
-
+            $io->section('protoc Output');
             foreach($protos as $proto) {
                 // Create php_out directory if it doesn't exist yet.
                 $modulePhpOutdir = $phpOutDir . DIRECTORY_SEPARATOR . $proto['bundle'];
@@ -127,6 +372,9 @@ class GenerateCommand extends ContainerAwareCommand
                     $io->write($process->getOutput());
                 }
             }
+
+            $io->section('Summary');
+            $io->table(['CampaignChain Module', 'Google Proto', 'Elasticsearch Mapping'], $table);
         }
     }
 }
