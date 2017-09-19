@@ -171,6 +171,7 @@ class GenerateCommand extends ContainerAwareCommand
                             /*
                              * Index does not exist, so let's create it.
                              */
+                            $io->writeln('The index alias ' . $esIndexAlias . ' does not exist yet');
 
                             // Create a new index
                             $params = [
