@@ -55,6 +55,43 @@ class GenerateCommand extends ContainerAwareCommand
         $esService = $this->getContainer()->get('campaignchain.core.service.elasticsearch');
         $esClient = $esService->getClient();
 
+        // Create a snapshot of Elasticsearch before we change anything
+        if(
+            $this->getContainer()->hasParameter('elasticsearch_s3_bucket') &&
+            $this->getContainer()->hasParameter('elasticsearch_s3_region') &&
+            $this->getContainer()->hasParameter('elasticsearch_s3_access_key') &&
+            $this->getContainer()->hasParameter('elasticsearch_s3_secret_key')
+        ){
+            $esS3Bucket     = $this->getContainer()->getParameter('elasticsearch_s3_bucket');
+            $esS3Region     = $this->getContainer()->getParameter('elasticsearch_s3_region');
+            $esS3AccessKey  = $this->getContainer()->getParameter('elasticsearch_s3_access_key');
+            $esS3SecretKey  = $this->getContainer()->getParameter('elasticsearch_s3_secret_key');
+
+            if(strlen($esS3AccessKey) > 0 && strlen($esS3SecretKey) > 0){
+                $params = [
+                    'repository' => 'backup',
+                    'body' => [
+                        'type' => 's3',
+                        'settings' => [
+                            'bucket' => $esS3Bucket,
+                            'region' => $esS3Region,
+                            'access_key' => $esS3AccessKey,
+                            'secret_key' => $esS3SecretKey,
+                            'base_path' => 'esp/elasticsearch'
+
+                        ]
+                    ],
+                ];
+                $esClient->snapshot()->createRepository($params);
+                $snapshot = time();
+                $params = [
+                    'repository' => 'backup',
+                    'snapshot' => $snapshot,
+                ];
+                $esClient->snapshot()->create($params);
+            }
+        }
+
         $this->protoPath =
             str_replace('/', DIRECTORY_SEPARATOR,
                 $this->getContainer()->getParameter('campaignchain_protobuf.bundle_proto_path')
@@ -169,8 +206,6 @@ class GenerateCommand extends ContainerAwareCommand
                                 $aliases = $esClient->indices()->getAliases(array(
                                     'index' => $esIndexAlias,
                                 ));
-
-                                print_r($aliases);
 
                                 if (!isset($aliases[$esIndexAlias]['aliases'])) {
                                     $aliasesKeys = array_keys($aliases);
