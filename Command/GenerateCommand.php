@@ -34,7 +34,7 @@ use Symfony\Component\Process\Exception\ProcessFailedException;
 
 class GenerateCommand extends ContainerAwareCommand
 {
-    private $migrationPath;
+    private $commonFields;
 
     protected function configure()
     {
@@ -66,8 +66,11 @@ class GenerateCommand extends ContainerAwareCommand
             $esS3Region     = $this->getContainer()->getParameter('elasticsearch_s3_region');
             $esS3AccessKey  = $this->getContainer()->getParameter('elasticsearch_s3_access_key');
             $esS3SecretKey  = $this->getContainer()->getParameter('elasticsearch_s3_secret_key');
+            $esS3BasePath  = $this->getContainer()->getParameter('elasticsearch_s3_base_path');
 
             if(strlen($esS3AccessKey) > 0 && strlen($esS3SecretKey) > 0){
+                $io->section('Creating Elasticsearch Snapshot');
+
                 $params = [
                     'repository' => 'backup',
                     'body' => [
@@ -77,8 +80,7 @@ class GenerateCommand extends ContainerAwareCommand
                             'region' => $esS3Region,
                             'access_key' => $esS3AccessKey,
                             'secret_key' => $esS3SecretKey,
-                            'base_path' => 'esp/elasticsearch'
-
+                            'base_path' => $esS3BasePath,
                         ]
                     ],
                 ];
@@ -89,6 +91,22 @@ class GenerateCommand extends ContainerAwareCommand
                     'snapshot' => $snapshot,
                 ];
                 $esClient->snapshot()->create($params);
+
+                /*
+                 * Continue only once the snapshot has been created, to avoid
+                 * a "Cannot delete indices that are being snapshotted" error.
+                 */
+                $snapshotDone = false;
+                while($snapshotDone == false) {
+                    $status = $esClient->snapshot()->status($params);
+                    if(!isset($status['snapshots'][0]) || $status['snapshots'][0]['state'] == 'SUCCESS'){
+                        $snapshotDone = true;
+                        $io->success('Done');
+                    } else {
+                        $io->writeln('Waiting 5 seconds to check again');
+                        sleep(5);
+                    }
+                }
             }
         }
 
@@ -106,6 +124,9 @@ class GenerateCommand extends ContainerAwareCommand
         }
 
         $phpOutDir  = $this->getContainer()->getParameter('campaignchain_protobuf.php_out');
+
+        // Get the common fields
+        $this->commonFields = $this->getContainer()->getParameter('campaignchain.core.esp.common_fields');
 
         $fs = new Filesystem();
 
@@ -160,6 +181,7 @@ class GenerateCommand extends ContainerAwareCommand
                             . '.esp.'
                             . str_replace('/', '.', $bundle->getName());
                         $esIndexNew = str_replace('campaignchain.esp.', 'campaignchain_.esp.', $esIndexAlias).'.'.time();
+
                         $aliases = array();
                         $esIndexOld = null;
 
@@ -177,13 +199,7 @@ class GenerateCommand extends ContainerAwareCommand
                             $params = [
                                 'index' => $esIndexNew,
                                 'body' => [
-                                    'mappings' => [
-                                        $esType => [
-                                            'properties' => [
-                                                'properties' => $esMappings,
-                                            ]
-                                        ]
-                                    ]
+                                    'mappings' => $this->getMapping($esType, $esMappings)
                                 ],
                             ];
                             $io->writeln('Create new index ' . $esIndexNew);
@@ -228,13 +244,7 @@ class GenerateCommand extends ContainerAwareCommand
                                     $params = [
                                         'index' => $esIndexNew,
                                         'body' => [
-                                            'mappings' => [
-                                                $esType => [
-                                                    'properties' => [
-                                                        'properties' => $esMappings,
-                                                    ]
-                                                ]
-                                            ]
+                                            'mappings' => $this->getMapping($esType, $esMappings)
                                         ],
                                     ];
                                     $io->writeln('Create new index ' . $esIndexNew);
@@ -281,13 +291,7 @@ class GenerateCommand extends ContainerAwareCommand
                                         $params = [
                                             'index' => $esIndexOld,
                                             'type' => $esType,
-                                            'body' => [
-                                                $esType => [
-                                                    'properties' => [
-                                                        'properties' => $esMappings,
-                                                    ]
-                                                ]
-                                            ],
+                                            'body' => $this->getMapping($esType, $esMappings),
                                         ];
 
                                         $esClient->indices()->putMapping($params);
@@ -305,13 +309,7 @@ class GenerateCommand extends ContainerAwareCommand
                                         $params = [
                                             'index' => $esIndexNew,
                                             'body' => [
-                                                'mappings' => [
-                                                    $esType => [
-                                                        'properties' => [
-                                                            'properties' => $esMappings,
-                                                        ]
-                                                    ]
-                                                ]
+                                                'mappings' => $this->getMapping($esType, $esMappings)
                                             ],
                                         ];
                                         $io->writeln('Create new index ' . $esIndexNew);
@@ -412,5 +410,15 @@ class GenerateCommand extends ContainerAwareCommand
             $io->section('Summary');
             $io->table(['CampaignChain Module', 'Google Proto', 'Elasticsearch Mapping'], $table);
         }
+    }
+
+    private function getMapping($type, $mapping)
+    {
+        $completeMapping = $this->commonFields;
+        $completeMapping['properties']['properties'] = $mapping;
+
+        return array(
+            $type => $completeMapping
+        );
     }
 }
