@@ -110,6 +110,23 @@ class GenerateCommand extends ContainerAwareCommand
             }
         }
 
+        /*
+         * Delete all zombie indices which remained without an alias from
+         * previous unsuccessfull runs of this command.
+         */
+        $io->section('Delete Zombie Indices');
+        $indices = $esClient->indices()->getAliases();
+        $esIndexPrefix = $this->getContainer()->getParameter('elasticsearch_index');
+        foreach ($indices as $index => $aliases){
+            if(
+                !count($aliases['aliases']) &&
+                strpos($index, $esIndexPrefix.'_.'.'esp') === 0
+            ){
+                $esClient->indices()->delete(array('index' => $index));
+                $io->writeln('Deleted index '.$index);
+            }
+        }
+
         $this->protoPath =
             str_replace('/', DIRECTORY_SEPARATOR,
                 $this->getContainer()->getParameter('campaignchain_protobuf.bundle_proto_path')
